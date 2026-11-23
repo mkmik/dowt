@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"log"
@@ -203,6 +202,8 @@ func (d *dowt) poll() {
 			if !st.busy && time.Since(st.at) >= refreshEvery {
 				st.busy = true
 				go func() {
+					branch := gitOut(dir, "branch", "--show-current")
+					d.update(dir, func(st *status) { st.branch = branch })
 					d.sem <- struct{}{}
 					branch, r, err := lookup(dir)
 					<-d.sem
@@ -302,25 +303,32 @@ func (d *dowt) ccwt(root string, args ...string) error {
 	return err
 }
 
-// done is the ✓ that cleans the worktree up: green when ccwt says removing it
-// is safe (or hasn't said yet: the removal asks again), and a click removes
-// it; grey when it isn't, and a click opens a sheet saying why, with Remove
-// anyway. Its Close is the way out.
+// tool is a button of the panel's toolbar, drawn as dense draws its own: an
+// SF Symbol, grey, or in the color of kind (a StatusBadge's: ok is green).
+// Without an event it does nothing itself, and a Modal uses it as its trigger.
+func tool(id, icon, kind, help, event string) map[string]any {
+	c := map[string]any{"id": id, "component": "ToolbarButton", "icon": icon, "kind": kind, "help": help}
+	if event != "" {
+		c["action"] = map[string]any{"event": map[string]any{"name": event}}
+	}
+	return c
+}
+
+// done is the ✓ that cleans the worktree up. Green when ccwt says removing it
+// is safe, and a click removes it. Grey until ccwt has said, and a click asks
+// the removal, which refuses if it isn't. Grey when it isn't safe, and a click
+// opens a sheet saying why, with Remove anyway; its Close is the way out.
 func (d *dowt) done(st *status) []any {
-	if st.unsafe == "" {
-		kind := "ok"
-		if st.checked.IsZero() {
-			kind = "none"
-		}
-		return []any{
-			map[string]any{"id": "done", "component": "Button", "variant": "borderless", "child": "done_mark",
-				"action": map[string]any{"event": map[string]any{"name": "removeWorktree"}}},
-			map[string]any{"id": "done_mark", "component": "StatusBadge", "kind": kind, "text": "✓"},
-		}
+	const help = "Done: remove this worktree, its branch and its Space"
+	switch {
+	case st.checked.IsZero():
+		return []any{tool("done", "checkmark", "", help, "removeWorktree")}
+	case st.unsafe == "":
+		return []any{tool("done", "checkmark", "ok", help, "removeWorktree")}
 	}
 	return []any{
 		map[string]any{"id": "done", "component": "Modal", "trigger": "done_mark", "content": "sheet"},
-		map[string]any{"id": "done_mark", "component": "StatusBadge", "kind": "none", "text": "✓"},
+		tool("done_mark", "checkmark", "", "Not safe to remove: "+st.unsafe, ""),
 		map[string]any{"id": "sheet", "component": "Column", "children": []string{"sheet_title", "sheet_why", "sheet_note", "force"}},
 		map[string]any{"id": "sheet_title", "component": "Text", "text": "Not safe to remove this worktree"},
 		map[string]any{"id": "sheet_why", "component": "Text", "text": st.unsafe, "variant": "caption"},
@@ -389,10 +397,8 @@ func (d *dowt) view(surface string) []any {
 	c := []any{
 		map[string]any{"id": "head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": []string{"branch", "buttons"}},
 		map[string]any{"id": "buttons", "component": "Row", "align": "center", "children": buttons},
-		text("branch", cmp.Or(st.branch, "—")),
-		map[string]any{"id": "new", "component": "Button", "variant": "borderless", "child": "new_icon",
-			"action": map[string]any{"event": map[string]any{"name": "newWorktree"}}},
-		map[string]any{"id": "new_icon", "component": "Icon", "name": "add"},
+		text("branch", st.branch),
+		tool("new", "plus", "", "New worktree, beside this one", "newWorktree"),
 	}
 	c = append(c, d.done(st)...)
 
