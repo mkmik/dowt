@@ -55,3 +55,16 @@ func TestGLabReview(t *testing.T) {
 		t.Error("graphql errors should be an error")
 	}
 }
+
+func TestWorktreeOf(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"/r/.claude/worktrees/foo": {"/r", "foo"},
+		"/r":                       {"", ""},
+		"/r/worktrees/foo":         {"", ""},
+		"":                         {"", ""},
+	} {
+		if root, name := worktreeOf(in); root != want[0] || name != want[1] {
+			t.Errorf("worktreeOf(%q) = %q, %q; want %q", in, root, name, want)
+		}
+	}
+}

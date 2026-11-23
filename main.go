@@ -50,6 +50,7 @@ func main() {
 	os.Chmod(*endpoint, 0o600)
 
 	d := newDowt(&dennet{
+		ns:  *ns,
 		api: "http://dennet/apis/den.mkm.pub/v1alpha1/namespaces/" + *ns + "/",
 		c: &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(ctx, "unix", *sock)
@@ -74,6 +75,7 @@ func main() {
 
 // dennet is a client of dennet's API, in one namespace.
 type dennet struct {
+	ns  string
 	api string
 	c   *http.Client
 }

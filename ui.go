@@ -7,6 +7,9 @@ import (
 	"log"
 	"maps"
 	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -40,7 +43,10 @@ type status struct {
 	err    error
 	at     time.Time // when last looked up; zero is never
 	busy   bool
-	note   string // what the last + did
+	note   string // what the last + or − did
+	// blocked is why ccwt refused to remove the worktree: the panel then asks
+	// whether to remove it anyway.
+	blocked string
 }
 
 func newDowt(dn *dennet, endpoint string) *dowt {
@@ -105,6 +111,15 @@ func (d *dowt) serve(s *session) {
 			d.mu.Unlock()
 		case msg.Action != nil && msg.Action.Name == "newWorktree":
 			go d.newWorktree(msg.Action.SurfaceID)
+		case msg.Action != nil && msg.Action.Name == "removeWorktree":
+			go d.removeWorktree(msg.Action.SurfaceID, false)
+		case msg.Action != nil && msg.Action.Name == "forceRemoveWorktree":
+			go d.removeWorktree(msg.Action.SurfaceID, true)
+		case msg.Action != nil && msg.Action.Name == "cancelRemove":
+			d.mu.Lock()
+			dir := d.dirOf(msg.Action.SurfaceID)
+			d.mu.Unlock()
+			d.update(dir, func(st *status) { st.blocked = "" })
 		case msg.Error != nil:
 			log.Printf("dense reports an error: %v", msg.Error)
 		}
@@ -221,12 +236,67 @@ func (d *dowt) newWorktree(surface string) {
 	d.note(dir, "+ failed: "+err.Error())
 }
 
+// removeWorktree is the −: `ccwt remove`, which refuses unless the branch is
+// merged, the worktree clean and no agent is working in it, and on its way
+// deletes the Spaces on the worktree, their tabs and their dens. A refusal is
+// shown with a button to remove it anyway (-D); a safe removal asks nothing.
+//
+// ccwt is told it runs in a den (of no tab) in our namespace, so it uses
+// dennet: for the agents it checks for, and for the Spaces it closes.
+func (d *dowt) removeWorktree(surface string, force bool) {
+	d.mu.Lock()
+	dir := d.dirOf(surface)
+	d.mu.Unlock()
+	root, name := worktreeOf(dir)
+	if name == "" {
+		return
+	}
+	d.update(dir, func(st *status) { st.blocked, st.note = "", "removing "+name+"…" })
+	args := []string{"remove", "-y", name}
+	if force {
+		args = append(args, "-D")
+	}
+	cmd := exec.Command("ccwt", args...)
+	cmd.Dir = root
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "HERDR_") && !strings.HasPrefix(kv, "DEN_SOCKET=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, "DEN_SOCKET="+filepath.Join(os.TempDir(), "den", d.dn.ns, extName+".sock"))
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimPrefix(strings.TrimSpace(string(out)), "ccwt: error: ")
+	switch {
+	case err == nil:
+		d.update(dir, func(st *status) { st.note = "removed " + name })
+	case force:
+		d.update(dir, func(st *status) { st.note = "− failed: " + cmp.Or(msg, err.Error()) })
+	default:
+		d.update(dir, func(st *status) { st.note, st.blocked = "", cmp.Or(msg, err.Error()) })
+	}
+}
+
+// worktreeOf is the repo and the name of the ccwt worktree at dir,
+// <root>/.claude/worktrees/<name>, or "" for any other directory.
+func worktreeOf(dir string) (root, name string) {
+	parent := filepath.Dir(dir)
+	if dir == "" || filepath.Base(parent) != "worktrees" || filepath.Base(filepath.Dir(parent)) != ".claude" {
+		return "", ""
+	}
+	return filepath.Dir(filepath.Dir(parent)), filepath.Base(dir)
+}
+
 func (d *dowt) note(dir, text string) {
+	d.update(dir, func(st *status) { st.note = text })
+}
+
+// update changes dir's status and redraws its panels.
+func (d *dowt) update(dir string, change func(*status)) {
 	d.mu.Lock()
 	if d.status[dir] == nil {
 		d.status[dir] = &status{}
 	}
-	d.status[dir].note = text
+	change(d.status[dir])
 	d.mu.Unlock()
 	d.redraw(dir)
 }
@@ -250,6 +320,9 @@ func (d *dowt) view(surface string) []any {
 	if dir != "" {
 		head = append(head, "new")
 	}
+	if _, name := worktreeOf(dir); name != "" {
+		head = append(head, "remove")
+	}
 	children := []string{"head"}
 	c := []any{
 		map[string]any{"id": "head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": head},
@@ -257,6 +330,9 @@ func (d *dowt) view(surface string) []any {
 		map[string]any{"id": "new", "component": "Button", "variant": "borderless", "child": "new_icon",
 			"action": map[string]any{"event": map[string]any{"name": "newWorktree"}}},
 		map[string]any{"id": "new_icon", "component": "Icon", "name": "add"},
+		map[string]any{"id": "remove", "component": "Button", "variant": "borderless", "child": "remove_icon",
+			"action": map[string]any{"event": map[string]any{"name": "removeWorktree"}}},
+		map[string]any{"id": "remove_icon", "component": "Icon", "name": "delete"},
 	}
 
 	r := st.review
@@ -295,6 +371,20 @@ func (d *dowt) view(surface string) []any {
 			text("link_text", r.Ref+" "+r.Title),
 		)
 		children = append(children, "badges", "link")
+	}
+	if st.blocked != "" {
+		button := func(id, event, label string) []any {
+			return []any{
+				map[string]any{"id": id, "component": "Button", "child": id + "_text",
+					"action": map[string]any{"event": map[string]any{"name": event}}},
+				text(id+"_text", label),
+			}
+		}
+		c = append(c, text("blocked", "Not safe to remove: "+st.blocked),
+			map[string]any{"id": "confirm", "component": "Row", "children": []string{"force", "cancel"}})
+		c = append(c, button("force", "forceRemoveWorktree", "Remove anyway")...)
+		c = append(c, button("cancel", "cancelRemove", "Cancel")...)
+		children = append(children, "blocked", "confirm")
 	}
 	if st.note != "" {
 		c, children = append(c, text("note", st.note)), append(children, "note")
