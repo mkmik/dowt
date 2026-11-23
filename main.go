@@ -289,7 +289,32 @@ func (d *dowt) newSpace(from space, path string) (string, error) {
 	if isCode(err, http.StatusConflict) {
 		err = d.dn.do(http.MethodPost, "spaces", map[string]any{"metadata": map[string]any{"generateName": "space-"}, "spec": spec}, &made)
 	}
-	return made.Metadata.Name, err
+	if err != nil {
+		return "", err
+	}
+	return made.Metadata.Name, d.newTerminal(made.Metadata.Name, path)
+}
+
+// newTerminal makes a terminal tab in space, in dir: a Den, which dennet
+// starts, and a Surface showing it, named after the Den, as dense and ccwt
+// make a new tab.
+func (d *dowt) newTerminal(space, dir string) error {
+	var den struct{ Metadata objectMeta }
+	if err := d.dn.do(http.MethodPost, "dens", map[string]any{
+		"metadata": map[string]any{"generateName": space + "-"},
+		"spec":     map[string]any{"workingDir": dir, "inheritEnv": []string{"LANG", "LC_*", "SSH_AUTH_SOCK", "TMPDIR"}},
+	}, &den); err != nil {
+		return err
+	}
+	err := d.dn.do(http.MethodPost, "surfaces", map[string]any{
+		"metadata": map[string]any{"name": den.Metadata.Name},
+		"spec": map[string]any{"space": space, "order": 1, "kind": "terminal",
+			"terminal": map[string]any{"den": den.Metadata.Name}},
+	}, nil)
+	if err != nil {
+		d.dn.do(http.MethodDelete, "dens/"+den.Metadata.Name, nil, nil) // a den no tab shows is one nobody would find
+	}
+	return err
 }
 
 // dnsLabel is name as a Kubernetes name can have it, or "" when nothing is left.

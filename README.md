@@ -11,7 +11,8 @@ Every Space gets a small panel in the sidebar box named `details`:
   which opens it in the browser;
 - a **+** button. It runs `ccwt new --force-create --path` in the Space's
   working directory, then adds a Space for the new worktree, under the
-  Space of the repo's main checkout. Starting an agent there is up to you.
+  Space of the repo's main checkout, with a terminal tab open in the new
+  worktree. Starting an agent there is up to you.
 
 ## How it works
 
