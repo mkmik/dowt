@@ -13,13 +13,14 @@ Every Space gets a small panel in the sidebar box named `details`:
   working directory, then adds a Space for the new worktree, under the
   Space of the repo's main checkout, with a terminal tab open in the new
   worktree. Starting an agent there is up to you.
-- a **trash** button, on Spaces whose directory is a ccwt worktree
-  (`<repo>/.claude/worktrees/<name>`). It runs `ccwt remove`, which removes
-  the worktree, its branch and the Spaces on it (with their tabs and
-  terminals). When that is safe (the branch is merged, nothing is
-  uncommitted, and no agent is working there) it just happens. When it isn't,
-  the panel says why and offers **Remove anyway** (`ccwt remove -D`) or
-  **Cancel**.
+- a **✓** ("done, clean it up"), on Spaces whose directory is a ccwt worktree
+  (`<repo>/.claude/worktrees/<name>`). It is green when `ccwt remove --check`
+  says removing it is safe (the branch is merged, nothing is uncommitted, no
+  agent is working there), and a click removes the worktree, its branch and
+  the Spaces on it, with their tabs and terminals, without asking. It is
+  grey when it isn't safe; a click then opens a sheet saying why, with
+  **Remove anyway** (`ccwt remove -D`). Safety is asked again every 30
+  seconds, and once more by the removal itself.
 
 ## How it works
 
@@ -37,7 +38,8 @@ each panel's branch at most every 2 minutes, 4 at a time.
     go install github.com/mkmik/dowt@latest
     dowt
 
-It needs dennet running, and `git`, `gh`/`glab` and `ccwt` on `PATH`. To
+It needs dennet running, and `git`, `gh`/`glab` and `ccwt` (with
+`remove --check`) on `PATH`. To
 remove its panels, stop it and `dennet delete extension dowt`; otherwise
 dennet removes them 10 minutes after dowt stops.
 
