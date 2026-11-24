@@ -368,10 +368,10 @@ func newSheet(st *status) (string, []any) {
 		map[string]any{"id": "new_sheet", "component": "Column", "children": []string{"new_title", "new_name", "new_note", "create"}},
 		map[string]any{"id": "new_title", "component": "Text", "text": "New worktree"},
 		map[string]any{"id": "new_name", "component": "TextField", "label": "Name", "placeholder": "empty for a random one",
-			"value": map[string]any{"path": path}},
+			"value": map[string]any{"@path": path}},
 		map[string]any{"id": "new_note", "component": "Text", "text": st.note, "variant": "caption"},
 		map[string]any{"id": "create", "component": "Button", "variant": "primary", "child": "create_text",
-			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"name": map[string]any{"path": path}}}}},
+			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"name": map[string]any{"@path": path}}}}},
 		map[string]any{"id": "create_text", "component": "Text", "text": "Create"},
 	}
 }
