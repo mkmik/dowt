@@ -17,8 +17,8 @@ Every Space gets a small panel in the sidebar box named `details`:
     started from the upstream of the main checkout's branch (usually
     `origin/main`), with copies of the ignored files `.worktreeinclude`
     names. Then it adds a Space for it, under the Space of the repo's main
-    checkout, with a terminal tab open in it. Starting an agent there is up
-    to you.
+    checkout, with a terminal tab open in it, and switches the window you
+    clicked in to it. Starting an agent there is up to you.
   - **✓** ("done, clean it up") is on Spaces whose directory is such a
     worktree. It is green when removing it is safe: the branch is merged into
     `main` or `origin/main` (also squash-merged), nothing is uncommitted, and
