@@ -477,21 +477,26 @@ func (d *dowt) view(surface string) []any {
 		c, children = append(c, text("msg", "no PR/MR yet")), append(children, "msg")
 	default:
 		badges := []string{"state"}
-		c = append(c, badge("state", map[string]string{"open": "busy", "merged": "ok"}[r.State], r.State))
+		// Color only what asks for attention: red is broken, yellow is my
+		// move, green is done. The normal path (open, CI passed) stays grey.
+		c = append(c, badge("state", map[string]string{"merged": "ok"}[r.State], r.State))
 		if r.Approval != "" {
 			badges = append(badges, "approval")
-			kind, label := "warn", "needs approval"
+			kind, label := "", "needs approval"
 			switch r.Approval {
 			case "approved":
-				kind, label = "ok", "approved"
+				label = "approved"
+				if r.State == "open" { // merging is on me now
+					kind = "warn"
+				}
 			case "changes":
-				kind, label = "error", "changes requested"
+				kind, label = "warn", "changes requested"
 			}
 			c = append(c, badge("approval", kind, label))
 		}
 		if r.CI != "" {
 			badges = append(badges, "ci")
-			kind := map[string]string{"running": "busy", "failed": "error", "passed": "ok", "manual": "warn"}[r.CI]
+			kind := map[string]string{"failed": "error", "manual": "warn"}[r.CI]
 			c = append(c, badge("ci", kind, "CI "+r.CI))
 		}
 		c = append(c,
