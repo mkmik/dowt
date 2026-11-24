@@ -1,0 +1,26 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    # macOS, for dense's catalog check: it runs the A2UI Swift library dense draws panels with.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      # Would dense's main draw the panels, or refuse them? (ui_test.go writes them.)
+      - uses: actions/checkout@v4
+        with:
+          repository: mkmik/dense
+          path: dense
+          sparse-checkout: macos
+      - uses: actions/cache@v4
+        with:
+          path: dense/macos/A2UICheck/.build
+          key: a2ui-check-${{ hashFiles('dense/macos/Ghostty.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'dense/macos/A2UICheck/Package.swift') }}
+      - run: dense/macos/A2UICheck/check.sh testdata/panels.jsonl

@@ -57,5 +57,13 @@ more squash and rebase merges as merged. To
 remove its panels, stop it and `dennet delete extension dowt`; otherwise
 dennet removes them 10 minutes after dowt stops.
 
+## Test
+
+`go test ./...` also writes every kind of panel to `testdata/panels.jsonl`
+(`go test -update` once a change to them is meant). dense's
+`macos/A2UICheck/check.sh testdata/panels.jsonl` checks them against dense's
+catalog in a minute or two, without building dense; CI checks them against
+dense's main, and dense's CI checks dowt's main against each dense change.
+
 To change what the panel shows, edit `view` in `ui.go`; for another forge,
 `lookup` in `forge.go`; for worktrees, `worktree.go`.

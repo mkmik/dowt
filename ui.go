@@ -140,12 +140,17 @@ func (d *dowt) subscribe(s *session, name string) {
 		d.subs[s] = map[string]bool{}
 	}
 	d.subs[s][name] = true
-	components := d.view(name)
+	msg := d.create(name)
 	d.mu.Unlock()
-	s.send(map[string]any{"version": "1.0", "createSurface": map[string]any{
-		"surfaceId": name, "catalogId": denseCatalog, "components": components, "dataModel": map[string]any{},
-	}})
+	s.send(msg)
 	d.poll()
+}
+
+// create is the createSurface that draws a panel afresh. Call with d.mu held.
+func (d *dowt) create(name string) map[string]any {
+	return map[string]any{"version": "1.0", "createSurface": map[string]any{
+		"surfaceId": name, "catalogId": denseCatalog, "components": d.view(name), "dataModel": map[string]any{},
+	}}
 }
 
 // setSpaces is what reconcile last saw; a change redraws every panel.
@@ -503,11 +508,14 @@ func (d *dowt) view(surface string) []any {
 		}
 		c = append(c,
 			map[string]any{"id": "badges", "component": "Row", "children": badges},
-			map[string]any{"id": "link", "component": "Button", "variant": "borderless", "child": "link_text",
-				"action": map[string]any{"functionCall": map[string]any{"@call": "openUrl", "args": map[string]any{"url": r.URL}}}},
 			text("link_text", r.Ref+" "+r.Title),
 		)
-		children = append(children, "badges", "link")
+		children = append(children, "badges", "link_text")
+		if r.URL != "" { // dense refuses an openUrl of ""
+			c = append(c, map[string]any{"id": "link", "component": "Button", "variant": "borderless", "child": "link_text",
+				"action": map[string]any{"functionCall": map[string]any{"@call": "openUrl", "args": map[string]any{"url": r.URL}}}})
+			children[len(children)-1] = "link"
+		}
 	}
 	if st.note != "" {
 		c, children = append(c, text("note", st.note)), append(children, "note")
