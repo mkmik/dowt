@@ -48,7 +48,7 @@ func commitWork(t *testing.T, path, msg string) {
 
 func mustMake(t *testing.T, dir string) (path, name string) {
 	t.Helper()
-	path, err := makeWorktree(dir)
+	path, err := makeWorktree(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,5 +419,18 @@ func TestRoots(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"/r", "/s"}; !slices.Equal(got, want) {
 		t.Errorf("roots = %v, want %v", got, want)
+	}
+}
+
+// A worktree gets the name it's given; a name that isn't one directory is refused.
+func TestMakeWorktreeNamed(t *testing.T) {
+	dir := initRepo(t)
+	if path, err := makeWorktree(dir, "my-fix.2"); err != nil || filepath.Base(path) != "my-fix.2" {
+		t.Fatalf("got %q, %v", path, err)
+	}
+	for _, bad := range []string{"a/b", "..", "-x", "a b"} {
+		if _, err := makeWorktree(dir, bad); err == nil {
+			t.Errorf("%q: no error", bad)
+		}
 	}
 }
