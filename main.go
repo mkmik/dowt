@@ -335,6 +335,17 @@ func (d *dowt) newSpace(from space, path, title string) (string, error) {
 	return made.Metadata.Name, d.newTerminal(made.Metadata.Name, path)
 }
 
+// show asks dense to show space in the window whose click on our Surface
+// named surface asked for it: the dense.mkm.pub/show annotation, with the time
+// so that every ask is a change.
+func (d *dowt) show(surface, space string) {
+	ask, _ := json.Marshal(map[string]string{"space": space, "at": time.Now().UTC().Format(time.RFC3339Nano)})
+	meta := map[string]any{"annotations": map[string]any{"dense.mkm.pub/show": string(ask)}}
+	if err := d.dn.do(http.MethodPatch, "surfaces/"+surface, map[string]any{"metadata": meta}, nil); err != nil {
+		log.Print(err)
+	}
+}
+
 // newTerminal makes a terminal tab in space, in dir: a Den, which dennet
 // starts, and a Surface showing it, named after the Den, as dense makes a new tab.
 func (d *dowt) newTerminal(space, dir string) error {

@@ -278,7 +278,8 @@ func (d *dowt) poll() {
 
 // newWorktree is the Create of the +'s sheet: a new worktree beside the
 // panel's, with a random name, and a Space on it titled title (the worktree's
-// name if ""). Starting an agent in it is left to you.
+// name if ""), which the window clicked in then shows. Starting an agent in
+// it is left to you.
 func (d *dowt) newWorktree(surface, title string) {
 	d.mu.Lock()
 	sp, ok := d.spaces[strings.TrimPrefix(surface, prefix)]
@@ -293,6 +294,7 @@ func (d *dowt) newWorktree(surface, title string) {
 		var name string
 		if name, err = d.newSpace(sp, path, title); err == nil {
 			d.update(dir, func(st *status) { st.note, st.made = "made Space "+name, st.made+1 })
+			d.show(surface, name)
 			return
 		}
 	}
