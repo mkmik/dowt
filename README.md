@@ -10,9 +10,9 @@ Every Space gets a small panel in the sidebar box named `details`:
   closed; approved or not; CI running, failed or passed; and its title,
   which opens it in the browser;
 - a toolbar of two buttons, drawn like dense's own (grey symbols):
-  - **+** opens a sheet that asks for a name (left empty, a random one like
-    `dreamy-foraging-hickey`). **Create** makes a new worktree of the
-    Space's repo, at
+  - **+** opens a sheet that asks for a title for the new Space (left
+    empty, the worktree's name). **Create** makes a new worktree of the
+    Space's repo, with a random name like `dreamy-foraging-hickey`, at
     `<repo>/.claude/worktrees/<name>` on a new branch `worktree-<name>`
     started from the upstream of the main checkout's branch (usually
     `origin/main`), with copies of the ignored files `.worktreeinclude`

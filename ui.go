@@ -102,7 +102,7 @@ func (d *dowt) serve(s *session) {
 				Name      string `json:"name"`
 				SurfaceID string `json:"surfaceId"`
 				Context   struct {
-					Name string `json:"name"`
+					Title string `json:"title"`
 				} `json:"context"`
 			} `json:"action"`
 			Error map[string]any `json:"error"`
@@ -123,7 +123,7 @@ func (d *dowt) serve(s *session) {
 			delete(d.subs[s], msg.Dense.Unsubscribe.SurfaceID)
 			d.mu.Unlock()
 		case msg.Action != nil && msg.Action.Name == "newWorktree":
-			go d.newWorktree(msg.Action.SurfaceID, strings.TrimSpace(msg.Action.Context.Name))
+			go d.newWorktree(msg.Action.SurfaceID, strings.TrimSpace(msg.Action.Context.Title))
 		case msg.Action != nil && msg.Action.Name == "removeWorktree":
 			go d.removeWorktree(msg.Action.SurfaceID, false)
 		case msg.Action != nil && msg.Action.Name == "forceRemoveWorktree":
@@ -277,9 +277,9 @@ func (d *dowt) poll() {
 }
 
 // newWorktree is the Create of the +'s sheet: a new worktree beside the
-// panel's, called name (a random one if ""), and a Space on it. Starting an
-// agent in it is left to you.
-func (d *dowt) newWorktree(surface, name string) {
+// panel's, with a random name, and a Space on it titled title (the worktree's
+// name if ""). Starting an agent in it is left to you.
+func (d *dowt) newWorktree(surface, title string) {
 	d.mu.Lock()
 	sp, ok := d.spaces[strings.TrimPrefix(surface, prefix)]
 	d.mu.Unlock()
@@ -288,10 +288,10 @@ func (d *dowt) newWorktree(surface, name string) {
 		return
 	}
 	d.note(dir, "creating a worktree…")
-	path, err := makeWorktree(dir, name)
+	path, err := makeWorktree(dir)
 	if err == nil {
 		var name string
-		if name, err = d.newSpace(sp, path); err == nil {
+		if name, err = d.newSpace(sp, path, title); err == nil {
 			d.update(dir, func(st *status) { st.note, st.made = "made Space "+name, st.made+1 })
 			return
 		}
@@ -357,7 +357,7 @@ func tool(id, icon, kind, help, event string) map[string]any {
 	return c
 }
 
-// newSheet is the +: a click opens a sheet asking the new worktree's name.
+// newSheet is the +: a click opens a sheet asking the new Space's title.
 // Its id and the field's data path change with every worktree made, so the
 // sheet closes, and opens again with an empty field.
 func newSheet(st *status) (string, []any) {
@@ -367,11 +367,11 @@ func newSheet(st *status) (string, []any) {
 		tool("new_mark", "plus", "", "New worktree, beside this one", ""),
 		map[string]any{"id": "new_sheet", "component": "Column", "children": []string{"new_title", "new_name", "new_note", "create"}},
 		map[string]any{"id": "new_title", "component": "Text", "text": "New worktree"},
-		map[string]any{"id": "new_name", "component": "TextField", "label": "Name", "placeholder": "empty for a random one",
+		map[string]any{"id": "new_name", "component": "TextField", "label": "Title", "placeholder": "empty for the worktree's name",
 			"value": map[string]any{"@path": path}},
 		map[string]any{"id": "new_note", "component": "Text", "text": st.note, "variant": "caption"},
 		map[string]any{"id": "create", "component": "Button", "variant": "primary", "child": "create_text",
-			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"name": map[string]any{"@path": path}}}}},
+			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"title": map[string]any{"@path": path}}}}},
 		map[string]any{"id": "create_text", "component": "Text", "text": "Create"},
 	}
 }

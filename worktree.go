@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -39,22 +38,12 @@ func git(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// validName is what a worktree may be called: one directory, and a branch
-// name git takes.
-var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-
 // makeWorktree makes a new worktree, on a new branch, of the repo dir is in
 // (the main checkout's, when dir is one of its worktrees), and returns its path.
 // The branch starts from the upstream of the main checkout's branch
 // (origin/main, usually), which is fetched more often than main is pulled, and
-// doesn't track it. No upstream: from HEAD. An empty name is a random one.
-func makeWorktree(dir, name string) (string, error) {
-	if name == "" {
-		name = worktreeName()
-	}
-	if !validName.MatchString(name) {
-		return "", fmt.Errorf("bad name %q: letters, digits, '.', '_' and '-' only", name)
-	}
+// doesn't track it. No upstream: from HEAD.
+func makeWorktree(dir string) (string, error) {
 	top, err := git(dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
@@ -63,6 +52,7 @@ func makeWorktree(dir, name string) (string, error) {
 	if r, wt := worktreeOf(root); wt != "" {
 		root = r
 	}
+	name := worktreeName()
 	path := filepath.Join(root, ".claude", "worktrees", name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", err
