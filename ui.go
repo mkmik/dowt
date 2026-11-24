@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"maps"
 	"net"
@@ -49,6 +50,7 @@ type status struct {
 	at     time.Time // when last looked up; zero is never
 	busy   bool
 	note   string // what the last + or ✓ did
+	made   int    // worktrees the + made here: a new one closes its sheet and empties its field
 
 	// unsafe is why removing the worktree would lose something, "" when it
 	// wouldn't; checked is when that was last asked, zero for never.
@@ -99,6 +101,9 @@ func (d *dowt) serve(s *session) {
 			Action *struct {
 				Name      string `json:"name"`
 				SurfaceID string `json:"surfaceId"`
+				Context   struct {
+					Name string `json:"name"`
+				} `json:"context"`
 			} `json:"action"`
 			Error map[string]any `json:"error"`
 		}
@@ -118,7 +123,7 @@ func (d *dowt) serve(s *session) {
 			delete(d.subs[s], msg.Dense.Unsubscribe.SurfaceID)
 			d.mu.Unlock()
 		case msg.Action != nil && msg.Action.Name == "newWorktree":
-			go d.newWorktree(msg.Action.SurfaceID)
+			go d.newWorktree(msg.Action.SurfaceID, strings.TrimSpace(msg.Action.Context.Name))
 		case msg.Action != nil && msg.Action.Name == "removeWorktree":
 			go d.removeWorktree(msg.Action.SurfaceID, false)
 		case msg.Action != nil && msg.Action.Name == "forceRemoveWorktree":
@@ -271,9 +276,10 @@ func (d *dowt) poll() {
 	}
 }
 
-// newWorktree is the +: a new worktree beside the panel's, and a Space on it.
-// Starting an agent in it is left to you.
-func (d *dowt) newWorktree(surface string) {
+// newWorktree is the Create of the +'s sheet: a new worktree beside the
+// panel's, called name (a random one if ""), and a Space on it. Starting an
+// agent in it is left to you.
+func (d *dowt) newWorktree(surface, name string) {
 	d.mu.Lock()
 	sp, ok := d.spaces[strings.TrimPrefix(surface, prefix)]
 	d.mu.Unlock()
@@ -282,11 +288,11 @@ func (d *dowt) newWorktree(surface string) {
 		return
 	}
 	d.note(dir, "creating a worktree…")
-	path, err := makeWorktree(dir)
+	path, err := makeWorktree(dir, name)
 	if err == nil {
 		var name string
 		if name, err = d.newSpace(sp, path); err == nil {
-			d.note(dir, "made Space "+name)
+			d.update(dir, func(st *status) { st.note, st.made = "made Space "+name, st.made+1 })
 			return
 		}
 	}
@@ -349,6 +355,25 @@ func tool(id, icon, kind, help, event string) map[string]any {
 		c["action"] = map[string]any{"event": map[string]any{"name": event}}
 	}
 	return c
+}
+
+// newSheet is the +: a click opens a sheet asking the new worktree's name.
+// Its id and the field's data path change with every worktree made, so the
+// sheet closes, and opens again with an empty field.
+func newSheet(st *status) (string, []any) {
+	id, path := fmt.Sprintf("new%d", st.made), fmt.Sprintf("/name%d", st.made)
+	return id, []any{
+		map[string]any{"id": id, "component": "Modal", "trigger": "new_mark", "content": "new_sheet"},
+		tool("new_mark", "plus", "", "New worktree, beside this one", ""),
+		map[string]any{"id": "new_sheet", "component": "Column", "children": []string{"new_title", "new_name", "new_note", "create"}},
+		map[string]any{"id": "new_title", "component": "Text", "text": "New worktree"},
+		map[string]any{"id": "new_name", "component": "TextField", "label": "Name", "placeholder": "empty for a random one",
+			"value": map[string]any{"path": path}},
+		map[string]any{"id": "new_note", "component": "Text", "text": st.note, "variant": "caption"},
+		map[string]any{"id": "create", "component": "Button", "variant": "primary", "child": "create_text",
+			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"name": map[string]any{"path": path}}}}},
+		map[string]any{"id": "create_text", "component": "Text", "text": "Create"},
+	}
 }
 
 // done is the ✓ that cleans the worktree up. Green when removing it is safe,
@@ -423,9 +448,10 @@ func (d *dowt) view(surface string) []any {
 		st = &status{}
 	}
 
+	newID, newSheet := newSheet(st)
 	buttons := []string{}
 	if dir != "" {
-		buttons = append(buttons, "new")
+		buttons = append(buttons, newID)
 	}
 	if _, wt := worktreeOf(dir); wt != "" {
 		buttons = append(buttons, "done")
@@ -435,8 +461,8 @@ func (d *dowt) view(surface string) []any {
 		map[string]any{"id": "head", "component": "Row", "justify": "spaceBetween", "align": "center", "children": []string{"branch", "buttons"}},
 		map[string]any{"id": "buttons", "component": "Row", "align": "center", "children": buttons},
 		text("branch", st.branch),
-		tool("new", "plus", "", "New worktree, beside this one", "newWorktree"),
 	}
+	c = append(c, newSheet...)
 	c = append(c, d.done(st)...)
 
 	r := st.review
