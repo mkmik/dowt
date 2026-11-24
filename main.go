@@ -295,8 +295,12 @@ func (d *dowt) applyExtension() (string, error) {
 
 // newSpace makes a Space on the worktree at path, last among the repo's
 // worktrees: under the Space on the repo's main checkout, else beside the
-// Space the + was clicked in. Named after the directory.
-func (d *dowt) newSpace(from space, path string) (string, error) {
+// Space the + was clicked in. Named after the directory, and titled title, or
+// after the directory too if title is "".
+func (d *dowt) newSpace(from space, path, title string) (string, error) {
+	if title == "" {
+		title = filepath.Base(path)
+	}
 	root := strings.TrimSuffix(gitOut(path, "rev-parse", "--path-format=absolute", "--git-common-dir"), "/.git")
 	spaces, err := list[space](d.dn, "spaces")
 	if err != nil {
@@ -315,7 +319,7 @@ func (d *dowt) newSpace(from space, path string) (string, error) {
 			order = max(order, s.Spec.Order+1)
 		}
 	}
-	spec := map[string]any{"title": filepath.Base(path), "workingDir": path, "order": order, "parent": parent}
+	spec := map[string]any{"title": title, "workingDir": path, "order": order, "parent": parent}
 	var made space
 	meta := map[string]any{"name": dnsLabel(filepath.Base(path))}
 	if meta["name"] == "" {
