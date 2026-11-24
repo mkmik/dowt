@@ -3,13 +3,11 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"log"
 	"maps"
 	"net"
-	"os"
-	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +22,10 @@ const (
 	recheckEvery = 30 * time.Second
 	// lookups is how many gh/glab lookups may run at once.
 	lookups = 4
+	// fetchEvery is how often origin's main is fetched in the repos of the
+	// worktrees the panels show, and fetchTimeout how long one fetch may take.
+	fetchEvery   = time.Minute
+	fetchTimeout = time.Minute
 )
 
 // dowt holds what the panels show and who is looking. Panels are keyed by
@@ -48,8 +50,8 @@ type status struct {
 	busy   bool
 	note   string // what the last + or ✓ did
 
-	// unsafe is why `ccwt remove` would refuse to remove the worktree, "" when
-	// it wouldn't; checked is when that was last asked, zero for never.
+	// unsafe is why removing the worktree would lose something, "" when it
+	// wouldn't; checked is when that was last asked, zero for never.
 	unsafe   string
 	checked  time.Time
 	checking bool
@@ -179,6 +181,32 @@ func (d *dowt) pollLoop() {
 	}
 }
 
+// fetchLoop keeps origin's main fresh in the repo of every worktree a Space
+// is on, as a hand-run fetch would: the ✓ asks whether a branch is merged
+// into it. One repo after another, and the wait after the round, so a slow
+// fetch doesn't pile up on the next.
+func (d *dowt) fetchLoop() {
+	for {
+		time.Sleep(fetchEvery)
+		for _, root := range d.roots() {
+			fetchMain(root)
+		}
+	}
+}
+
+// roots is the repos the live Spaces' worktrees are of, each once.
+func (d *dowt) roots() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var roots []string
+	for _, sp := range d.spaces {
+		if root, wt := worktreeOf(sp.Spec.WorkingDir); wt != "" && !sp.Spec.Archived && !slices.Contains(roots, root) {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
 // poll looks up again every shown panel's review that is older than
 // refreshEvery, and asks again whether its worktree is safe to remove once
 // that answer is older than recheckEvery.
@@ -207,16 +235,32 @@ func (d *dowt) poll() {
 					d.sem <- struct{}{}
 					branch, r, err := lookup(dir)
 					<-d.sem
+					// Merged on the forge, not by the last check: origin/main
+					// may not have it yet. Fetch it now, and ask again.
+					d.mu.Lock()
+					stale := d.status[dir].unsafe != ""
+					d.mu.Unlock()
+					root, wt := worktreeOf(dir)
+					stale = stale && wt != "" && r != nil && r.State == "merged"
+					if stale {
+						fetchMain(root)
+					}
 					d.update(dir, func(st *status) {
 						st.branch, st.review, st.err, st.at, st.busy = branch, r, err, time.Now(), false
+						if stale {
+							st.checked = time.Time{}
+						}
 					})
+					if stale {
+						d.poll()
+					}
 				}()
 			}
 			if root, wt := worktreeOf(dir); wt != "" && !st.checking && time.Since(st.checked) >= recheckEvery {
 				st.checking = true
 				go func() {
 					d.sem <- struct{}{}
-					err := d.ccwt(root, "remove", "--check", wt)
+					err := d.unsafe(root, wt)
 					<-d.sem
 					d.update(dir, func(st *status) {
 						st.unsafe, st.checked, st.checking = errText(err), time.Now(), false
@@ -227,8 +271,8 @@ func (d *dowt) poll() {
 	}
 }
 
-// newWorktree is the +: `ccwt new` beside the panel's worktree, and a Space on
-// the new one. Starting an agent in it is left to you.
+// newWorktree is the +: a new worktree beside the panel's, and a Space on it.
+// Starting an agent in it is left to you.
 func (d *dowt) newWorktree(surface string) {
 	d.mu.Lock()
 	sp, ok := d.spaces[strings.TrimPrefix(surface, prefix)]
@@ -238,8 +282,7 @@ func (d *dowt) newWorktree(surface string) {
 		return
 	}
 	d.note(dir, "creating a worktree…")
-	out, err := run(dir, "ccwt", "new", "--force-create", "--path")
-	path := strings.TrimSpace(string(out))
+	path, err := makeWorktree(dir)
 	if err == nil {
 		var name string
 		if name, err = d.newSpace(sp, path); err == nil {
@@ -250,11 +293,11 @@ func (d *dowt) newWorktree(surface string) {
 	d.note(dir, "+ failed: "+err.Error())
 }
 
-// removeWorktree is the ✓: `ccwt remove`, which refuses unless the branch is
-// merged, the worktree clean and no agent is working in it, and on its way
-// deletes the Spaces on the worktree, their tabs and their dens. force is -D,
-// from the sheet the ✓ opens when ccwt said it would refuse. One that was safe
-// when last asked and isn't any more is refused, and its ✓ turns grey.
+// removeWorktree is the ✓: it closes the Spaces on the worktree, with their
+// tabs and terminals, and removes the worktree and its branch. Unless forced
+// (Remove anyway, from the sheet the ✓ opens when it isn't safe), it refuses
+// when that would lose something; one that was safe when last asked and isn't
+// any more is refused, and its ✓ turns grey.
 func (d *dowt) removeWorktree(surface string, force bool) {
 	d.mu.Lock()
 	dir := d.dirOf(surface)
@@ -264,11 +307,17 @@ func (d *dowt) removeWorktree(surface string, force bool) {
 		return
 	}
 	d.note(dir, "removing "+name+"…")
-	args := []string{"remove", "-y", name}
-	if force {
-		args = append(args, "-D")
+	var err error
+	if !force {
+		err = d.unsafe(root, name)
 	}
-	err := d.ccwt(root, args...)
+	if err == nil {
+		// Before the directory they're in goes away.
+		err = d.dn.closeSpaces(dir, filepath.Join(realpath(root), ".claude", "worktrees", name))
+	}
+	if err == nil {
+		err = deleteWorktree(root, name)
+	}
 	d.update(dir, func(st *status) {
 		switch {
 		case err == nil:
@@ -281,26 +330,14 @@ func (d *dowt) removeWorktree(surface string, force bool) {
 	})
 }
 
-// ccwt runs ccwt in root, with what it said on failure as the error. It is
-// told it runs in a den (of no tab) in our namespace, so it uses dennet: for
-// the agents it checks for, and for the Spaces it closes.
-func (d *dowt) ccwt(root string, args ...string) error {
-	cmd := exec.Command("ccwt", args...)
-	cmd.Dir = root
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "HERDR_") && !strings.HasPrefix(kv, "DEN_SOCKET=") {
-			cmd.Env = append(cmd.Env, kv)
-		}
+// unsafe is why removing the worktree name of the repo at root would lose
+// something, nil when it wouldn't.
+func (d *dowt) unsafe(root, name string) error {
+	busy, err := d.dn.busyCwds()
+	if err != nil {
+		return err
 	}
-	cmd.Env = append(cmd.Env, "DEN_SOCKET="+filepath.Join(os.TempDir(), "den", d.dn.ns, extName+".sock"))
-	out, err := cmd.CombinedOutput()
-	if msg := strings.TrimPrefix(strings.TrimSpace(string(out)), "ccwt: error: "); err != nil && msg != "" {
-		if strings.Contains(msg, "unknown flag --check") {
-			msg = "this ccwt can't say whether it's safe (no remove --check)"
-		}
-		return errors.New(msg)
-	}
-	return err
+	return unsafeToRemove(root, name, busy)
 }
 
 // tool is a button of the panel's toolbar, drawn as dense draws its own: an
@@ -314,8 +351,8 @@ func tool(id, icon, kind, help, event string) map[string]any {
 	return c
 }
 
-// done is the ✓ that cleans the worktree up. Green when ccwt says removing it
-// is safe, and a click removes it. Grey until ccwt has said, and a click asks
+// done is the ✓ that cleans the worktree up. Green when removing it is safe,
+// and a click removes it. Grey until that's known, and a click asks
 // the removal, which refuses if it isn't. Grey when it isn't safe, and a click
 // opens a sheet saying why, with Remove anyway; its Close is the way out.
 func (d *dowt) done(st *status) []any {
@@ -346,7 +383,7 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// worktreeOf is the repo and the name of the ccwt worktree at dir,
+// worktreeOf is the repo and the name of the worktree at dir,
 // <root>/.claude/worktrees/<name>, or "" for any other directory.
 func worktreeOf(dir string) (root, name string) {
 	parent := filepath.Dir(dir)

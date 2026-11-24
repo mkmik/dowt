@@ -35,15 +35,25 @@ func lookup(dir string) (branch string, r *review, err error) {
 	case strings.Contains(host, "github"):
 		r, err = ghLookup(dir)
 	default:
-		// The review is the one of the branch origin knows, which may be pushed under another name.
-		up := strings.TrimPrefix(gitOut(dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"), "origin/")
-		r, err = glabLookup(dir, host, project, cmp.Or(up, branch))
+		r, err = glabLookup(dir, host, project, cmp.Or(pushedAs(dir, branch), branch))
 	}
 	return branch, r, err
 }
 
+// pushedAs is the name origin knows branch by, which may be another, or "".
+// Read off the config: once merged, origin deletes the branch and a fetch
+// prunes its ref, and the name has to outlive both to find the review.
+func pushedAs(dir, branch string) string {
+	return gitOut(dir, "for-each-ref", "--format=%(upstream:lstrip=3)", "refs/heads/"+branch)
+}
+
+// gitOut is what git says, "" when it fails: some commands print their
+// argument back on the way out (rev-parse), which is no answer.
 func gitOut(dir string, args ...string) string {
-	out, _ := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		return ""
+	}
 	return strings.TrimSpace(string(out))
 }
 

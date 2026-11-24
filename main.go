@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -42,6 +44,11 @@ func main() {
 	flag.Parse()
 
 	os.MkdirAll(filepath.Dir(*endpoint), 0o700)
+	// Before the socket: a second dowt would take it from the first, which
+	// would go on reconciling, looking up and fetching for nobody.
+	if err := lockOnce(*endpoint + ".lock"); err != nil {
+		log.Fatal(err)
+	}
 	os.Remove(*endpoint)
 	ln, err := net.Listen("unix", *endpoint)
 	if err != nil {
@@ -63,6 +70,7 @@ func main() {
 	}
 	go d.reconcileLoop(kick)
 	go d.pollLoop()
+	go d.fetchLoop()
 	log.Printf("listening on %s", *endpoint)
 	for {
 		conn, err := ln.Accept()
@@ -71,6 +79,29 @@ func main() {
 		}
 		go d.serve(&session{conn: conn})
 	}
+}
+
+// held is the lock lockOnce took. Kept, or the GC would close the file and
+// let the lock go.
+var held *os.File
+
+// lockOnce takes the lock at path for as long as this process lives, or
+// says another dowt has it. The OS lets it go when the process dies, however
+// it dies, so there's nothing stale to clean up.
+func lockOnce(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return fmt.Errorf("another dowt is running (it holds %s)", path)
+		}
+		return err
+	}
+	held = f
+	return nil
 }
 
 // dennet is a client of dennet's API, in one namespace.
@@ -166,6 +197,9 @@ type surface struct {
 		UI    *struct {
 			Extension string `json:"extension"`
 		} `json:"ui"`
+		Terminal *struct {
+			Den string `json:"den"`
+		} `json:"terminal"`
 	} `json:"spec"`
 }
 
@@ -261,7 +295,7 @@ func (d *dowt) applyExtension() (string, error) {
 
 // newSpace makes a Space on the worktree at path, last among the repo's
 // worktrees: under the Space on the repo's main checkout, else beside the
-// Space the + was clicked in. Named after the directory, as ccwt names them.
+// Space the + was clicked in. Named after the directory.
 func (d *dowt) newSpace(from space, path string) (string, error) {
 	root := strings.TrimSuffix(gitOut(path, "rev-parse", "--path-format=absolute", "--git-common-dir"), "/.git")
 	spaces, err := list[space](d.dn, "spaces")
@@ -298,8 +332,7 @@ func (d *dowt) newSpace(from space, path string) (string, error) {
 }
 
 // newTerminal makes a terminal tab in space, in dir: a Den, which dennet
-// starts, and a Surface showing it, named after the Den, as dense and ccwt
-// make a new tab.
+// starts, and a Surface showing it, named after the Den, as dense makes a new tab.
 func (d *dowt) newTerminal(space, dir string) error {
 	var den struct{ Metadata objectMeta }
 	if err := d.dn.do(http.MethodPost, "dens", map[string]any{

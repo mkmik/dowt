@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseRemote(t *testing.T) {
 	for in, want := range map[string][2]string{
@@ -67,4 +71,42 @@ func TestWorktreeOf(t *testing.T) {
 			t.Errorf("worktreeOf(%q) = %q, %q; want %q", in, root, name, want)
 		}
 	}
+}
+
+// The name the branch was pushed under, still there once origin deleted it
+// and a fetch pruned its ref, as after a merge.
+func TestPushedAs(t *testing.T) {
+	repo := initRepo(t)
+	gitT(t, "remote", "add", "origin", repo)
+	gitT(t, "update-ref", "refs/remotes/origin/feature/x", "HEAD")
+	gitT(t, "switch", "-c", "local")
+	gitT(t, "branch", "--set-upstream-to=origin/feature/x")
+	if got := pushedAs(repo, "local"); got != "feature/x" {
+		t.Errorf("pushedAs = %q, want feature/x", got)
+	}
+	gitT(t, "update-ref", "-d", "refs/remotes/origin/feature/x")
+	if got := pushedAs(repo, "local"); got != "feature/x" {
+		t.Errorf("upstream gone: pushedAs = %q, want feature/x", got)
+	}
+	if got := pushedAs(repo, "main"); got != "" {
+		t.Errorf("no upstream: pushedAs = %q, want empty", got)
+	}
+}
+
+// A second dowt is refused while the first holds the lock, and gets it once
+// the first has let go.
+func TestLockOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dowt.sock.lock")
+	if err := lockOnce(path); err != nil {
+		t.Fatal(err)
+	}
+	first := held
+	if err := lockOnce(path); err == nil || !strings.Contains(err.Error(), "another dowt") {
+		t.Errorf("second lock: %v, want refusal", err)
+	}
+	first.Close()
+	if err := lockOnce(path); err != nil {
+		t.Errorf("after the first let go: %v", err)
+	}
+	held.Close()
 }
