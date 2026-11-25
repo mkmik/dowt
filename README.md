@@ -32,6 +32,13 @@ Every Space gets a small panel in the sidebar box named `details`:
     saying why, with **Remove anyway**. Safety is checked again every 30
     seconds, and once more by the removal itself.
 
+Each Space also gets a badge in dense's sidebar, the same ones ccwt puts
+there: `✓` merged (`±` if the worktree has uncommitted changes); while it is
+open, `☐` waiting on review, `■` on a merge train or in the merge queue, `▣`
+CI running, `☒` CI failed; `?` once the forge has failed to answer for 10
+minutes. A Space with no review, or a closed one, has no badge. dowt
+replaces only these glyphs, and leaves other badges on the Space alone.
+
 To keep "merged" true to the forge, dowt fetches `main` (`master` where there
 is no `main`) from `origin` every minute, in the repo of each worktree a Space
 is on, and at once when a review comes back merged while its ✓ is still grey.
