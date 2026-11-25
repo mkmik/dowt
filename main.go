@@ -63,6 +63,8 @@ func main() {
 			return (&net.Dialer{}).DialContext(ctx, "unix", *sock)
 		}}},
 	}, *endpoint)
+	d.startFile = filepath.Join(state, "dowt", "start.json")
+	d.start = loadStart(d.startFile)
 
 	kick := make(chan struct{}, 1)
 	for _, res := range []string{"spaces", "surfaces"} {
@@ -296,8 +298,8 @@ func (d *dowt) applyExtension() (string, error) {
 // newSpace makes a Space on the worktree at path, last among the repo's
 // worktrees: under the Space on the repo's main checkout, else beside the
 // Space the + was clicked in. Named after the directory, and titled title, or
-// after the directory too if title is "".
-func (d *dowt) newSpace(from space, path, title string) (string, error) {
+// after the directory too if title is "". Its terminal runs cmd, if not "".
+func (d *dowt) newSpace(from space, path, title, cmd string) (string, error) {
 	if title == "" {
 		title = filepath.Base(path)
 	}
@@ -332,7 +334,7 @@ func (d *dowt) newSpace(from space, path, title string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return made.Metadata.Name, d.newTerminal(made.Metadata.Name, path)
+	return made.Metadata.Name, d.newTerminal(made.Metadata.Name, path, cmd)
 }
 
 // show asks dense to show space in the window whose click on our Surface
@@ -348,11 +350,16 @@ func (d *dowt) show(surface, space string) {
 
 // newTerminal makes a terminal tab in space, in dir: a Den, which dennet
 // starts, and a Surface showing it, named after the Den, as dense makes a new tab.
-func (d *dowt) newTerminal(space, dir string) error {
+// With a cmd, the shell runs it first, as if typed, and stays when it exits.
+func (d *dowt) newTerminal(space, dir, cmd string) error {
+	spec := map[string]any{"workingDir": dir, "inheritEnv": []string{"LANG", "LC_*", "SSH_AUTH_SOCK", "TMPDIR"}}
+	if cmd != "" {
+		spec["command"] = shellCommand(cmd)
+	}
 	var den struct{ Metadata objectMeta }
 	if err := d.dn.do(http.MethodPost, "dens", map[string]any{
 		"metadata": map[string]any{"generateName": space + "-"},
-		"spec":     map[string]any{"workingDir": dir, "inheritEnv": []string{"LANG", "LC_*", "SSH_AUTH_SOCK", "TMPDIR"}},
+		"spec":     spec,
 	}, &den); err != nil {
 		return err
 	}
@@ -377,3 +384,15 @@ func dnsLabel(name string) string {
 	}
 	return strings.Trim(string(b), "-")
 }
+
+// shellCommand is the login shell's argv running cmd, interactive so its rc
+// files' aliases and PATH apply, then going on as the shell a tab starts with.
+func shellCommand(cmd string) []string {
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	return []string{sh, "-lic", cmd + "\nexec " + shellQuote(sh) + " -l"}
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

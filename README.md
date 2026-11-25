@@ -18,7 +18,11 @@ Every Space gets a small panel in the sidebar box named `details`:
     `origin/main`), with copies of the ignored files `.worktreeinclude`
     names. Then it adds a Space for it, under the Space of the repo's main
     checkout, with a terminal tab open in it, and switches the window you
-    clicked in to it. Starting an agent there is up to you.
+    clicked in to it. Under the title, a **Command** (`claude`, `codex`, …)
+    and a checkbox, **Run in its terminal**: when it is on, the new terminal
+    runs that command in your shell, as if you had typed it, and leaves you
+    in the shell when it exits. dowt remembers both, for the next **+**, in
+    `~/.local/state/dowt/start.json`.
   - **✓** ("done, clean it up") is on Spaces whose directory is such a
     worktree. It is green when removing it is safe: the branch is merged into
     `main` or `origin/main` (also squash-merged), nothing is uncommitted, and
