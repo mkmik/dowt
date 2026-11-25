@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -419,5 +420,36 @@ func TestRoots(t *testing.T) {
 	slices.Sort(got)
 	if want := []string{"/r", "/s"}; !slices.Equal(got, want) {
 		t.Errorf("roots = %v, want %v", got, want)
+	}
+}
+
+// badge puts the review's link on the Space, for dense to find it by, keeps
+// other badges and annotations, and takes the link off once there's no review.
+func TestBadgeSetsReviewLink(t *testing.T) {
+	var patches []string
+	obj := `{"metadata":{"resourceVersion":"7","annotations":{"other":"x"}},"spec":{"workingDir":"/w","badges":[{"text":"mine"}]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			b, _ := io.ReadAll(r.Body)
+			patches = append(patches, string(b))
+		}
+		w.Write([]byte(obj))
+	}))
+	t.Cleanup(srv.Close)
+	d := newDowt(&dennet{ns: "default", api: srv.URL + "/", c: srv.Client()}, "")
+	var sp space
+	json.Unmarshal([]byte(obj), &sp)
+	d.spaces = map[string]space{"wt": sp}
+
+	d.badge("/w", "☐", "https://x/pull/1")
+	obj = `{"metadata":{"resourceVersion":"7","annotations":{"other":"x","link.den.mkm.pub/review":"https://x/pull/1"}},"spec":{"workingDir":"/w","badges":[{"text":"mine"},{"text":"☐"}]}}`
+	d.badge("/w", "☐", "https://x/pull/1") // no change, no write
+	d.badge("/w", "", "")
+	want := []string{
+		`{"metadata":{"annotations":{"link.den.mkm.pub/review":"https://x/pull/1"},"resourceVersion":"7"},"spec":{"badges":[{"text":"mine"},{"text":"☐"}]}}`,
+		`{"metadata":{"annotations":{"link.den.mkm.pub/review":null},"resourceVersion":"7"},"spec":{"badges":[{"text":"mine"}]}}`,
+	}
+	if !slices.Equal(patches, want) {
+		t.Errorf("patches =\n%s\nwant\n%s", strings.Join(patches, "\n"), strings.Join(want, "\n"))
 	}
 }

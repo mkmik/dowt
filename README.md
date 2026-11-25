@@ -39,6 +39,15 @@ CI running, `☒` CI failed; `?` once the forge has failed to answer for 10
 minutes. A Space with no review, or a closed one, has no badge. dowt
 replaces only these glyphs, and leaves other badges on the Space alone.
 
+dowt also puts the review's link on the Space, in the annotation
+`link.den.mkm.pub/review`. Paste a PR or MR link (or a page of it, such as
+its diff) into dense's Open Space (⌘K) or sidebar filter, and it finds the
+Space. The link isn't shown, and isn't a tag, so it doesn't crowd `#`. Any
+other `link.den.mkm.pub/<kind>` annotation works the same way, such as an
+`issue` link to a Jira ticket put there by hand:
+
+    dennet annotate space <space> link.den.mkm.pub/issue=https://…/browse/KEY-1
+
 To keep "merged" true to the forge, dowt fetches `main` (`master` where there
 is no `main`) from `origin` every minute, in the repo of each worktree a Space
 is on, and at once when a review comes back merged while its ✓ is still grey.
