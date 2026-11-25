@@ -35,6 +35,7 @@ func TestPanels(t *testing.T) {
 			review: &review{State: "draft", Approval: "changes", CI: "manual"}}},
 	}
 	d := newDowt(nil, "")
+	d.start = start{Command: "claude", Run: true}
 	var got bytes.Buffer
 	for _, p := range panels {
 		sp := space{}
@@ -56,5 +57,20 @@ func TestPanels(t *testing.T) {
 	want, _ := os.ReadFile(file)
 	if !bytes.Equal(got.Bytes(), want) {
 		t.Errorf("panels differ from %s; check them with dense's check.sh, then go test -update", file)
+	}
+}
+
+// The +'s command and checkbox are kept for the next dowt.
+func TestStartKept(t *testing.T) {
+	file := t.TempDir() + "/dowt/start.json"
+	if got := loadStart(file); got != (start{Command: "claude"}) {
+		t.Errorf("with none kept: %+v", got)
+	}
+	d := newDowt(nil, "")
+	d.startFile = file
+	want := start{Command: "codex --yolo", Run: true}
+	d.setStart(want)
+	if got := loadStart(file); got != want {
+		t.Errorf("kept %+v, want %+v", got, want)
 	}
 }

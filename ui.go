@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -41,6 +42,48 @@ type dowt struct {
 	spaces map[string]space             // by name
 	status map[string]*status           // by working dir
 	subs   map[*session]map[string]bool // surfaces each frontend shows
+
+	// start is what the +'s sheet last ran in a new worktree's terminal,
+	// kept in startFile (none when "") so the sheet offers it again.
+	start     start
+	startFile string
+}
+
+// start is the +'s command, and whether to run it in the new worktree's terminal.
+type start struct {
+	Command string `json:"command"`
+	Run     bool   `json:"run"`
+}
+
+// loadStart is the start kept in file, or claude, not run, when there is none.
+func loadStart(file string) start {
+	s := start{Command: "claude"}
+	if b, err := os.ReadFile(file); err == nil {
+		json.Unmarshal(b, &s)
+	}
+	return s
+}
+
+// setStart keeps s for the next +, and puts it in every panel's sheet.
+func (d *dowt) setStart(s start) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.start == s {
+		return
+	}
+	d.start = s
+	if d.startFile != "" {
+		b, _ := json.Marshal(s)
+		os.MkdirAll(filepath.Dir(d.startFile), 0o700)
+		if err := os.WriteFile(d.startFile, b, 0o600); err != nil {
+			log.Print(err)
+		}
+	}
+	for sess, names := range d.subs {
+		for name := range names {
+			sess.send(map[string]any{"version": "1.0", "updateDataModel": map[string]any{"surfaceId": name, "path": "/start", "value": s}})
+		}
+	}
 }
 
 type status struct {
@@ -102,7 +145,9 @@ func (d *dowt) serve(s *session) {
 				Name      string `json:"name"`
 				SurfaceID string `json:"surfaceId"`
 				Context   struct {
-					Title string `json:"title"`
+					Title   string `json:"title"`
+					Command string `json:"command"`
+					Run     bool   `json:"run"`
 				} `json:"context"`
 			} `json:"action"`
 			Error map[string]any `json:"error"`
@@ -123,7 +168,8 @@ func (d *dowt) serve(s *session) {
 			delete(d.subs[s], msg.Dense.Unsubscribe.SurfaceID)
 			d.mu.Unlock()
 		case msg.Action != nil && msg.Action.Name == "newWorktree":
-			go d.newWorktree(msg.Action.SurfaceID, strings.TrimSpace(msg.Action.Context.Title))
+			c := msg.Action.Context
+			go d.newWorktree(msg.Action.SurfaceID, strings.TrimSpace(c.Title), start{strings.TrimSpace(c.Command), c.Run})
 		case msg.Action != nil && msg.Action.Name == "removeWorktree":
 			go d.removeWorktree(msg.Action.SurfaceID, false)
 		case msg.Action != nil && msg.Action.Name == "forceRemoveWorktree":
@@ -149,7 +195,7 @@ func (d *dowt) subscribe(s *session, name string) {
 // create is the createSurface that draws a panel afresh. Call with d.mu held.
 func (d *dowt) create(name string) map[string]any {
 	return map[string]any{"version": "1.0", "createSurface": map[string]any{
-		"surfaceId": name, "catalogId": denseCatalog, "components": d.view(name), "dataModel": map[string]any{},
+		"surfaceId": name, "catalogId": denseCatalog, "components": d.view(name), "dataModel": map[string]any{"start": d.start},
 	}}
 }
 
@@ -283,9 +329,14 @@ func (d *dowt) poll() {
 
 // newWorktree is the Create of the +'s sheet: a new worktree beside the
 // panel's, with a random name, and a Space on it titled title (the worktree's
-// name if ""), which the window clicked in then shows. Starting an agent in
-// it is left to you.
-func (d *dowt) newWorktree(surface, title string) {
+// name if ""), which the window clicked in then shows. Its terminal runs
+// s's command, if s says to run it.
+func (d *dowt) newWorktree(surface, title string, s start) {
+	d.setStart(s)
+	cmd := ""
+	if s.Run {
+		cmd = s.Command
+	}
 	d.mu.Lock()
 	sp, ok := d.spaces[strings.TrimPrefix(surface, prefix)]
 	d.mu.Unlock()
@@ -297,7 +348,7 @@ func (d *dowt) newWorktree(surface, title string) {
 	path, err := makeWorktree(dir)
 	if err == nil {
 		var name string
-		if name, err = d.newSpace(sp, path, title); err == nil {
+		if name, err = d.newSpace(sp, path, title, cmd); err == nil {
 			d.update(dir, func(st *status) { st.note, st.made = "made Space "+name, st.made+1 })
 			d.show(surface, name)
 			return
@@ -364,21 +415,26 @@ func tool(id, icon, kind, help, event string) map[string]any {
 	return c
 }
 
-// newSheet is the +: a click opens a sheet asking the new Space's title.
-// Its id and the field's data path change with every worktree made, so the
-// sheet closes, and opens again with an empty field.
+// newSheet is the +: a click opens a sheet asking the new Space's title, and
+// what to run in its terminal. Its id and the title's data path change with
+// every worktree made, so the sheet closes, and opens again with an empty
+// title; the command and its checkbox stay as they were (see setStart).
 func newSheet(st *status) (string, []any) {
 	id, path := fmt.Sprintf("new%d", st.made), fmt.Sprintf("/name%d", st.made)
 	return id, []any{
 		map[string]any{"id": id, "component": "Modal", "trigger": "new_mark", "content": "new_sheet"},
 		tool("new_mark", "plus", "", "New worktree, beside this one", ""),
-		map[string]any{"id": "new_sheet", "component": "Column", "children": []string{"new_title", "new_name", "new_note", "create"}},
+		map[string]any{"id": "new_sheet", "component": "Column", "children": []string{"new_title", "new_name", "new_run", "new_command", "new_note", "create"}},
 		map[string]any{"id": "new_title", "component": "Text", "text": "New worktree"},
 		map[string]any{"id": "new_name", "component": "TextField", "label": "Title", "placeholder": "empty for the worktree's name",
 			"value": map[string]any{"@path": path}},
+		map[string]any{"id": "new_run", "component": "CheckBox", "label": "Run in its terminal", "value": map[string]any{"@path": "/start/run"}},
+		map[string]any{"id": "new_command", "component": "TextField", "label": "Command", "placeholder": "claude, codex, …",
+			"value": map[string]any{"@path": "/start/command"}},
 		map[string]any{"id": "new_note", "component": "Text", "text": st.note, "variant": "caption"},
 		map[string]any{"id": "create", "component": "Button", "variant": "primary", "child": "create_text",
-			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{"title": map[string]any{"@path": path}}}}},
+			"action": map[string]any{"event": map[string]any{"name": "newWorktree", "context": map[string]any{
+				"title": map[string]any{"@path": path}, "command": map[string]any{"@path": "/start/command"}, "run": map[string]any{"@path": "/start/run"}}}}},
 		map[string]any{"id": "create_text", "component": "Text", "text": "Create"},
 	}
 }
