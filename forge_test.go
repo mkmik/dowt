@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,20 +23,53 @@ func TestParseRemote(t *testing.T) {
 }
 
 func TestGHReview(t *testing.T) {
-	for in, want := range map[string]review{
-		`{"number":43,"state":"OPEN","reviewDecision":"","statusCheckRollup":[]}`:                                                                                       {State: "open", Approval: "pending"},
-		`{"number":1,"state":"OPEN","isDraft":true,"reviewDecision":"APPROVED","statusCheckRollup":[{"status":"IN_PROGRESS"}]}`:                                         {State: "draft", Approval: "approved", CI: "running"},
-		`{"number":1,"state":"OPEN","reviewDecision":"CHANGES_REQUESTED","statusCheckRollup":[{"status":"IN_PROGRESS"},{"status":"COMPLETED","conclusion":"FAILURE"}]}`: {State: "open", Approval: "changes", CI: "failed"},
-		`{"number":1,"state":"OPEN","statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"state":"SUCCESS"}]}`:                                           {State: "open", Approval: "pending", CI: "passed"},
-		`{"number":1,"state":"OPEN","statusCheckRollup":[{"state":"PENDING"}]}`:                                                                                         {State: "open", Approval: "pending", CI: "running"},
-		`{"number":45,"state":"MERGED","statusCheckRollup":[{"status":"QUEUED"}]}`:                                                                                      {State: "merged"},
+	pr := func(fields, rollup string) string {
+		return `{"data":{"repository":{"pullRequests":{"nodes":[{` + fields +
+			`,"commits":{"nodes":[{"commit":{"statusCheckRollup":` + rollup + `}}]}}]}}}}`
+	}
+	for in, want := range map[string]*review{
+		`{"data":{"repository":{"pullRequests":{"nodes":[]}}}}`:                                           nil,
+		pr(`"number":43,"state":"OPEN","reviewDecision":null`, `null`):                                    {Ref: "#43", State: "open", Approval: "pending"},
+		pr(`"number":1,"state":"OPEN","isDraft":true,"reviewDecision":"APPROVED"`, `{"state":"PENDING"}`): {Ref: "#1", State: "draft", Approval: "approved", CI: "running"},
+		pr(`"number":1,"state":"OPEN","reviewDecision":"CHANGES_REQUESTED"`, `{"state":"FAILURE"}`):       {Ref: "#1", State: "open", Approval: "changes", CI: "failed"},
+		pr(`"number":1,"state":"OPEN"`, `{"state":"SUCCESS"}`):                                            {Ref: "#1", State: "open", Approval: "pending", CI: "passed"},
+		pr(`"number":1,"state":"OPEN","isInMergeQueue":true`, `{"state":"EXPECTED"}`):                     {Ref: "#1", State: "open", Approval: "pending", CI: "running", Queued: true},
+		pr(`"number":45,"state":"MERGED"`, `{"state":"PENDING"}`):                                         {Ref: "#45", State: "merged"},
 	} {
 		r, err := ghReview([]byte(in))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if r.State != want.State || r.Approval != want.Approval || r.CI != want.CI {
-			t.Errorf("ghReview(%s) = %+v; want %+v", in, *r, want)
+		if (r == nil) != (want == nil) || r != nil && *r != *want {
+			t.Errorf("ghReview(%s) = %+v; want %+v", in, r, want)
+		}
+	}
+	if _, err := ghReview([]byte(`{"errors":[{"message":"nope"}]}`)); err == nil {
+		t.Error("graphql errors should be an error")
+	}
+}
+
+// The badges are ccwt's, for the same states.
+func TestGlyph(t *testing.T) {
+	for _, c := range []struct {
+		r     *review
+		err   error
+		dirty bool
+		want  string
+	}{
+		{nil, nil, false, ""},
+		{nil, errors.New("down"), false, "?"},
+		{&review{State: "closed"}, nil, false, ""},
+		{&review{State: "merged"}, nil, false, "✓"},
+		{&review{State: "merged"}, nil, true, "±"},
+		{&review{State: "open", CI: "passed"}, nil, false, "☐"},
+		{&review{State: "draft"}, nil, false, "☐"},
+		{&review{State: "open", CI: "running"}, nil, false, "▣"},
+		{&review{State: "open", CI: "failed"}, nil, false, "☒"},
+		{&review{State: "open", CI: "running", Queued: true}, nil, false, "■"},
+	} {
+		if got := glyph(c.r, c.err, c.dirty); got != c.want {
+			t.Errorf("glyph(%+v, %v, %v) = %q; want %q", c.r, c.err, c.dirty, got, c.want)
 		}
 	}
 }
@@ -43,9 +78,12 @@ func TestGLabReview(t *testing.T) {
 	for in, want := range map[string]*review{
 		`{"data":{"project":{"mergeRequests":{"nodes":[]}}}}`: nil,
 		`{"data":{"project":null}}`:                           nil,
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","approved":true,"headPipeline":{"status":"RUNNING"}}]}}}}`: {Ref: "!7", State: "open", Approval: "approved", CI: "running"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","draft":true,"headPipeline":{"status":"FAILED"}}]}}}}`:     {Ref: "!7", State: "draft", Approval: "pending", CI: "failed"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"merged","headPipeline":{"status":"SUCCESS"}}]}}}}`:                 {Ref: "!7", State: "merged"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","approved":true,"headPipeline":{"status":"RUNNING"}}]}}}}`:                                                            {Ref: "!7", State: "open", Approval: "approved", CI: "running"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","draft":true,"headPipeline":{"status":"FAILED"}}]}}}}`:                                                                {Ref: "!7", State: "draft", Approval: "pending", CI: "failed"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"merged","headPipeline":{"status":"SUCCESS"}}]}}}}`:                                                                            {Ref: "!7", State: "merged"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"CI_STILL_RUNNING","autoMergeStrategy":"merge_train","headPipeline":{"status":"RUNNING"}}]}}}}`: {Ref: "!7", State: "open", Approval: "pending", CI: "running", Queued: true},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"NOT_APPROVED","autoMergeStrategy":"merge_train"}]}}}}`:                                         {Ref: "!7", State: "open", Approval: "pending"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","headPipeline":{"status":"WAITING_FOR_CALLBACK"}}]}}}}`:                                                               {Ref: "!7", State: "open", Approval: "pending", CI: "waiting for callback"},
 	} {
 		r, err := glabReview([]byte(in))
 		if err != nil {
@@ -90,6 +128,27 @@ func TestPushedAs(t *testing.T) {
 	}
 	if got := pushedAs(repo, "main"); got != "" {
 		t.Errorf("no upstream: pushedAs = %q, want empty", got)
+	}
+	gitT(t, "remote", "add", "upstream", repo)
+	gitT(t, "update-ref", "refs/remotes/upstream/other", "HEAD")
+	gitT(t, "branch", "--set-upstream-to=upstream/other")
+	if got := pushedAs(repo, "local"); got != "" {
+		t.Errorf("tracks another remote: pushedAs = %q, want empty", got)
+	}
+}
+
+// The branch being rebased is still the branch while HEAD is detached.
+func TestCheckedOutBranch(t *testing.T) {
+	repo := initRepo(t)
+	gitT(t, "switch", "-c", "feature")
+	if got := checkedOutBranch(repo); got != "feature" {
+		t.Errorf("checkedOutBranch = %q, want feature", got)
+	}
+	gitT(t, "switch", "--detach")
+	os.MkdirAll(filepath.Join(repo, ".git", "rebase-merge"), 0o755)
+	os.WriteFile(filepath.Join(repo, ".git", "rebase-merge", "head-name"), []byte("refs/heads/feature\n"), 0o644)
+	if got := checkedOutBranch(repo); got != "feature" {
+		t.Errorf("mid-rebase: checkedOutBranch = %q, want feature", got)
 	}
 }
 

@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -91,6 +93,13 @@ type status struct {
 	review *review
 	err    error
 	at     time.Time // when last looked up; zero is never
+	// failing is since when lookups have failed; zero while they don't.
+	failing time.Time
+	// good is the review the last lookup that didn't fail found, and goodAt
+	// when; zero for none yet. The badge goes on showing it while lookups
+	// fail, for up to unknownAfter, as ccwt's does.
+	good   *review
+	goodAt time.Time
 	busy   bool
 	note   string // what the last + or ✓ did
 	made   int    // worktrees the + made here: a new one closes its sheet and empties its field
@@ -301,12 +310,30 @@ func (d *dowt) poll() {
 					if stale {
 						fetchMain(root)
 					}
+					var show *review
+					var showErr error
+					var goodAt time.Time
 					d.update(dir, func(st *status) {
 						st.branch, st.review, st.err, st.at, st.busy = branch, r, err, time.Now(), false
 						if stale {
 							st.checked = time.Time{}
 						}
+						if _, none := errors.AsType[noReview](err); err == nil || none {
+							st.failing, st.good, st.goodAt = time.Time{}, r, st.at
+						} else if st.failing.IsZero() {
+							st.failing = st.at
+						}
+						// A failed lookup is no news: the badge goes on with the
+						// last good one until the failures have lasted unknownAfter.
+						show, goodAt = st.good, st.goodAt
+						if !st.failing.IsZero() && time.Since(st.failing) >= unknownAfter {
+							show, showErr = nil, err
+						}
 					})
+					if showErr != nil || !goodAt.IsZero() {
+						dirty := show != nil && show.State == "merged" && gitOut(dir, "status", "--porcelain") != ""
+						d.badge(dir, glyph(show, showErr, dirty))
+					}
 					if stale {
 						d.poll()
 					}
@@ -323,6 +350,92 @@ func (d *dowt) poll() {
 					})
 				}()
 			}
+		}
+	}
+}
+
+// unknownAfter is how long lookups have to go on failing before the badge
+// says "?", as ccwt's does.
+const unknownAfter = 10 * time.Minute
+
+// ccwtBadges are the glyphs glyph puts on a Space, which are how badge tells
+// its own from anyone else's: dennet's badges have no owner. They are ccwt's,
+// so the two agree and neither leaves the other's behind.
+var ccwtBadges = []string{"✓", "±", "☐", "■", "▣", "☒", "?"}
+
+// glyph is ccwt's badge for where a review stands: "✓" merged ("±" if the
+// worktree has uncommitted changes, so it doesn't read as "remove it"); while
+// open, "☐" waiting on review, "■" on a merge train or queue, "▣" CI running,
+// "☒" CI failed; "?" when the forge couldn't be asked; none for no review or
+// a closed one.
+func glyph(r *review, err error, dirty bool) string {
+	switch {
+	case err != nil:
+		return "?"
+	case r == nil || r.State == "closed":
+		return ""
+	case r.State == "merged" && dirty:
+		return "±"
+	case r.State == "merged":
+		return "✓"
+	case r.Queued:
+		return "■"
+	case r.CI == "running":
+		return "▣"
+	case r.CI == "failed":
+		return "☒"
+	}
+	return "☐"
+}
+
+// badge swaps our badge on every Space on dir for g, or takes it off for "",
+// and writes nothing when that changes nothing. The resourceVersion goes with
+// the write, so a badge someone else added meanwhile isn't written over: that
+// write fails, and the next lookup tries again.
+func (d *dowt) badge(dir, g string) {
+	type badge struct {
+		Text string `json:"text"`
+		Tone string `json:"tone,omitempty"`
+	}
+	d.mu.Lock()
+	var names []string
+	for name, sp := range d.spaces {
+		if sp.Spec.WorkingDir == dir && !sp.Spec.Archived {
+			names = append(names, name)
+		}
+	}
+	d.mu.Unlock()
+	for _, name := range names {
+		var sp struct {
+			Metadata struct {
+				ResourceVersion string `json:"resourceVersion"`
+			} `json:"metadata"`
+			Spec struct {
+				WorkingDir string  `json:"workingDir"`
+				Archived   bool    `json:"archived"`
+				Badges     []badge `json:"badges"`
+			} `json:"spec"`
+		}
+		if err := d.dn.do(http.MethodGet, "spaces/"+name, nil, &sp); err != nil {
+			log.Print(err)
+			continue
+		}
+		if sp.Spec.WorkingDir != dir || sp.Spec.Archived { // moved on since
+			continue
+		}
+		badges := slices.DeleteFunc(slices.Clone(sp.Spec.Badges), func(b badge) bool { return slices.Contains(ccwtBadges, b.Text) })
+		if g != "" {
+			badges = append(badges, badge{Text: g})
+		}
+		if slices.Equal(badges, sp.Spec.Badges) {
+			continue
+		}
+		err := d.dn.do(http.MethodPatch, "spaces/"+name, map[string]any{
+			"metadata": map[string]any{"resourceVersion": sp.Metadata.ResourceVersion},
+			"spec":     map[string]any{"badges": badges},
+		}, nil)
+		if err != nil {
+			log.Print(err)
 		}
 	}
 }
