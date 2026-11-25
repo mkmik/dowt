@@ -313,6 +313,7 @@ func (d *dowt) poll() {
 					var show *review
 					var showErr error
 					var goodAt time.Time
+					var link string
 					d.update(dir, func(st *status) {
 						st.branch, st.review, st.err, st.at, st.busy = branch, r, err, time.Now(), false
 						if stale {
@@ -326,13 +327,16 @@ func (d *dowt) poll() {
 						// A failed lookup is no news: the badge goes on with the
 						// last good one until the failures have lasted unknownAfter.
 						show, goodAt = st.good, st.goodAt
+						if st.good != nil {
+							link = st.good.URL
+						}
 						if !st.failing.IsZero() && time.Since(st.failing) >= unknownAfter {
 							show, showErr = nil, err
 						}
 					})
 					if showErr != nil || !goodAt.IsZero() {
 						dirty := show != nil && show.State == "merged" && gitOut(dir, "status", "--porcelain") != ""
-						d.badge(dir, glyph(show, showErr, dirty))
+						d.badge(dir, glyph(show, showErr, dirty), link)
 					}
 					if stale {
 						d.poll()
@@ -353,6 +357,13 @@ func (d *dowt) poll() {
 		}
 	}
 }
+
+// reviewLink is the annotation that links a Space to its worktree's PR or MR.
+// Links to what a Space is about are annotations link.den.mkm.pub/<kind>, one
+// link each, which any tool may write; pasting one into dense's Open Space (⌘K)
+// or sidebar filter finds the Space. The kind is what the link is, not who
+// writes it, so ccwt can write the same one and the two agree.
+const reviewLink = "link.den.mkm.pub/review"
 
 // unknownAfter is how long lookups have to go on failing before the badge
 // says "?", as ccwt's does.
@@ -389,10 +400,11 @@ func glyph(r *review, err error, dirty bool) string {
 }
 
 // badge swaps our badge on every Space on dir for g, or takes it off for "",
-// and writes nothing when that changes nothing. The resourceVersion goes with
+// and sets the Space's reviewLink to link, the review's URL, or takes it off
+// for "". It writes nothing when that changes nothing. The resourceVersion goes with
 // the write, so a badge someone else added meanwhile isn't written over: that
 // write fails, and the next lookup tries again.
-func (d *dowt) badge(dir, g string) {
+func (d *dowt) badge(dir, g, link string) {
 	type badge struct {
 		Text string `json:"text"`
 		Tone string `json:"tone,omitempty"`
@@ -408,7 +420,8 @@ func (d *dowt) badge(dir, g string) {
 	for _, name := range names {
 		var sp struct {
 			Metadata struct {
-				ResourceVersion string `json:"resourceVersion"`
+				ResourceVersion string            `json:"resourceVersion"`
+				Annotations     map[string]string `json:"annotations"`
 			} `json:"metadata"`
 			Spec struct {
 				WorkingDir string  `json:"workingDir"`
@@ -427,12 +440,19 @@ func (d *dowt) badge(dir, g string) {
 		if g != "" {
 			badges = append(badges, badge{Text: g})
 		}
-		if slices.Equal(badges, sp.Spec.Badges) {
+		if slices.Equal(badges, sp.Spec.Badges) && sp.Metadata.Annotations[reviewLink] == link {
 			continue
 		}
+		var linkValue any // null takes it off
+		if link != "" {
+			linkValue = link
+		}
 		err := d.dn.do(http.MethodPatch, "spaces/"+name, map[string]any{
-			"metadata": map[string]any{"resourceVersion": sp.Metadata.ResourceVersion},
-			"spec":     map[string]any{"badges": badges},
+			"metadata": map[string]any{
+				"resourceVersion": sp.Metadata.ResourceVersion,
+				"annotations":     map[string]any{reviewLink: linkValue},
+			},
+			"spec": map[string]any{"badges": badges},
 		}, nil)
 		if err != nil {
 			log.Print(err)
