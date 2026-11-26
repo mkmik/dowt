@@ -31,6 +31,8 @@ func TestPanels(t *testing.T) {
 			review: &review{Ref: "#1", URL: "https://x/1", Title: "t", State: "open", Approval: "approved", CI: "failed"}}},
 		{"merged", "/r/.claude/worktrees/merged", &status{branch: "b", at: now, checked: now,
 			review: &review{Ref: "!2", URL: "https://x/2", Title: "t", State: "merged"}}},
+		{"train", "/r/.claude/worktrees/train", &status{branch: "b", at: now,
+			review: &review{Ref: "!3", URL: "https://x/3", Title: "t", State: "open", Approval: "approved", CI: "running", Queued: true}}},
 		{"draft", "/r/.claude/worktrees/draft", &status{branch: "b", at: now, checked: now, unsafe: "uncommitted changes", note: "removing failed",
 			review: &review{State: "draft", Approval: "changes", CI: "manual"}}},
 	}
