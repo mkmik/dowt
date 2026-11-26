@@ -35,6 +35,7 @@ func TestGHReview(t *testing.T) {
 		pr(`"number":1,"state":"OPEN"`, `{"state":"SUCCESS"}`):                                            {Ref: "#1", State: "open", Approval: "pending", CI: "passed"},
 		pr(`"number":1,"state":"OPEN","isInMergeQueue":true`, `{"state":"EXPECTED"}`):                     {Ref: "#1", State: "open", Approval: "pending", CI: "running", Queued: true},
 		pr(`"number":45,"state":"MERGED"`, `{"state":"PENDING"}`):                                         {Ref: "#45", State: "merged"},
+		pr(`"number":46,"state":"MERGED","latestOpinionatedReviews":{"nodes":[{"state":"APPROVED","author":{"login":"a"}},{"state":"CHANGES_REQUESTED","author":{"login":"b"}},{"state":"APPROVED","author":{"login":"c"}}]}`, `null`): {Ref: "#46", State: "merged", Approvers: "a, c"},
 	} {
 		r, err := ghReview([]byte(in))
 		if err != nil {
@@ -78,12 +79,13 @@ func TestGLabReview(t *testing.T) {
 	for in, want := range map[string]*review{
 		`{"data":{"project":{"mergeRequests":{"nodes":[]}}}}`: nil,
 		`{"data":{"project":null}}`:                           nil,
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","approved":true,"headPipeline":{"status":"RUNNING"}}]}}}}`:                                                            {Ref: "!7", State: "open", Approval: "approved", CI: "running"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","draft":true,"headPipeline":{"status":"FAILED"}}]}}}}`:                                                                {Ref: "!7", State: "draft", Approval: "pending", CI: "failed"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"merged","headPipeline":{"status":"SUCCESS"}}]}}}}`:                                                                            {Ref: "!7", State: "merged"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"CI_STILL_RUNNING","autoMergeStrategy":"merge_train","headPipeline":{"status":"RUNNING"}}]}}}}`: {Ref: "!7", State: "open", Approval: "pending", CI: "running", Queued: true},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"NOT_APPROVED","autoMergeStrategy":"merge_train"}]}}}}`:                                         {Ref: "!7", State: "open", Approval: "pending"},
-		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","headPipeline":{"status":"WAITING_FOR_CALLBACK"}}]}}}}`:                                                               {Ref: "!7", State: "open", Approval: "pending", CI: "waiting for callback"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","approved":true,"headPipeline":{"status":"RUNNING"}}]}}}}`:                                                                   {Ref: "!7", State: "open", Approval: "approved", CI: "running"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","draft":true,"headPipeline":{"status":"FAILED"}}]}}}}`:                                                                       {Ref: "!7", State: "draft", Approval: "pending", CI: "failed"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"merged","headPipeline":{"status":"SUCCESS"}}]}}}}`:                                                                                   {Ref: "!7", State: "merged"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"CI_STILL_RUNNING","autoMergeStrategy":"merge_train","headPipeline":{"status":"RUNNING"}}]}}}}`:        {Ref: "!7", State: "open", Approval: "pending", CI: "running", Queued: true},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","detailedMergeStatus":"NOT_APPROVED","autoMergeStrategy":"merge_train"}]}}}}`:                                                {Ref: "!7", State: "open", Approval: "pending"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"merged","approvedBy":{"nodes":[{"username":"alice","name":"Alice"},{"username":"project_123_bot_0123abcd","name":"ci[bot]"}]}}]}}}}`: {Ref: "!7", State: "merged", Approvers: "alice, ci[bot]"},
+		`{"data":{"project":{"mergeRequests":{"nodes":[{"iid":"7","state":"opened","headPipeline":{"status":"WAITING_FOR_CALLBACK"}}]}}}}`:                                                                      {Ref: "!7", State: "open", Approval: "pending", CI: "waiting for callback"},
 	} {
 		r, err := glabReview([]byte(in))
 		if err != nil {

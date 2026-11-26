@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -18,6 +19,10 @@ type review struct {
 	State string
 	// Approval is approved, changes (requested) or pending; "" once it's in or dropped.
 	Approval string
+	// Approvers is who approved it, as ccwt's APPROVED column has them: by
+	// username, bar a GitLab access token's bot, whose username is a hash and
+	// whose name ("ci[bot]") says who it is. Kept once it's in too.
+	Approvers string
 	// CI is running, failed, passed, canceled or manual; "" for no CI, or once it's in or dropped.
 	CI string
 	// Queued is an open one on a merge train (GitLab) or in the merge queue
@@ -128,6 +133,7 @@ const ghQuery = `query($owner: String!, $name: String!, $branch: String!) {
     pullRequests(headRefName: $branch, orderBy: {field: UPDATED_AT, direction: DESC}, first: 1) {
       nodes {
         number url title state isDraft isInMergeQueue reviewDecision
+        latestOpinionatedReviews(first: 100) { nodes { state author { login } } }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
@@ -151,11 +157,17 @@ func ghReview(out []byte) (*review, error) {
 			Repository *struct {
 				PullRequests struct {
 					Nodes []struct {
-						Number                  int
-						URL, Title, State       string
-						IsDraft, IsInMergeQueue bool
-						ReviewDecision          string
-						Commits                 struct {
+						Number                   int
+						URL, Title, State        string
+						IsDraft, IsInMergeQueue  bool
+						ReviewDecision           string
+						LatestOpinionatedReviews struct {
+							Nodes []struct {
+								State  string
+								Author struct{ Login string }
+							}
+						}
+						Commits struct {
 							Nodes []struct {
 								Commit struct {
 									StatusCheckRollup *struct{ State string }
@@ -179,6 +191,15 @@ func ghReview(out []byte) (*review, error) {
 	}
 	pr := resp.Data.Repository.PullRequests.Nodes[0]
 	r := &review{Ref: "#" + strconv.Itoa(pr.Number), URL: pr.URL, Title: pr.Title, State: strings.ToLower(pr.State)}
+	// Whoever's latest say was an approval, which is what github counts: one
+	// who approved and then asked for changes hasn't approved it.
+	var names []string
+	for _, rv := range pr.LatestOpinionatedReviews.Nodes {
+		if rv.State == "APPROVED" {
+			names = append(names, rv.Author.Login)
+		}
+	}
+	r.Approvers = strings.Join(names, ", ")
 	if r.State != "open" {
 		return r, nil
 	}
@@ -208,7 +229,7 @@ func ghReview(out []byte) (*review, error) {
 const glabQuery = `query($project: ID!, $branch: String!) {
   project(fullPath: $project) {
     mergeRequests(sourceBranches: [$branch], sort: UPDATED_DESC, first: 1) {
-      nodes { iid title webUrl state draft approved detailedMergeStatus autoMergeStrategy headPipeline { status } }
+      nodes { iid title webUrl state draft approved approvedBy { nodes { username name } } detailedMergeStatus autoMergeStrategy headPipeline { status } }
     }
   }
 }`
@@ -223,6 +244,9 @@ func glabLookup(dir, host, project, branch string) (*review, error) {
 	return glabReview(out)
 }
 
+// tokenBot is the username gitlab makes up for an access token's bot user.
+var tokenBot = regexp.MustCompile(`^(group|project)_\d+_bot_`)
+
 func glabReview(out []byte) (*review, error) {
 	var resp struct {
 		Data struct {
@@ -231,9 +255,12 @@ func glabReview(out []byte) (*review, error) {
 					Nodes []struct {
 						IID, Title, WebURL, State string
 						Draft, Approved           bool
-						DetailedMergeStatus       string
-						AutoMergeStrategy         string
-						HeadPipeline              *struct{ Status string }
+						ApprovedBy                struct {
+							Nodes []struct{ Username, Name string }
+						}
+						DetailedMergeStatus string
+						AutoMergeStrategy   string
+						HeadPipeline        *struct{ Status string }
 					}
 				}
 			}
@@ -251,6 +278,14 @@ func glabReview(out []byte) (*review, error) {
 	}
 	mr := resp.Data.Project.MergeRequests.Nodes[0]
 	r := &review{Ref: "!" + mr.IID, URL: mr.WebURL, Title: mr.Title, State: mr.State}
+	var names []string
+	for _, u := range mr.ApprovedBy.Nodes {
+		if tokenBot.MatchString(u.Username) {
+			u.Username = u.Name
+		}
+		names = append(names, u.Username)
+	}
+	r.Approvers = strings.Join(names, ", ")
 	switch mr.State {
 	case "opened":
 		r.State = "open"
