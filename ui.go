@@ -676,17 +676,24 @@ func (d *dowt) view(surface string) []any {
 		// Color only what asks for attention: red is broken, yellow is my
 		// move, green is done. The normal path (open, CI passed) stays grey.
 		c = append(c, badge("state", map[string]string{"merged": "ok"}[r.State], r.State))
-		if r.Approval != "" {
+		if r.Approval != "" || r.Approvers != "" {
 			badges = append(badges, "approval")
 			kind, label := "", "needs approval"
 			switch r.Approval {
-			case "approved":
+			case "approved", "": // "": in or dropped, and who let it in is still worth knowing
 				label = "approved"
 				if r.State == "open" && !r.Queued { // merging is on me now
 					kind = "warn"
 				}
 			case "changes":
 				kind, label = "warn", "changes requested"
+			}
+			if r.Approvers != "" { // who, as ccwt's APPROVED column says
+				if label == "approved" {
+					label = "approved by " + r.Approvers
+				} else {
+					label += ", approved by " + r.Approvers
+				}
 			}
 			c = append(c, badge("approval", kind, label))
 		}
