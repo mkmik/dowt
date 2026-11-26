@@ -682,7 +682,7 @@ func (d *dowt) view(surface string) []any {
 			switch r.Approval {
 			case "approved":
 				label = "approved"
-				if r.State == "open" { // merging is on me now
+				if r.State == "open" && !r.Queued { // merging is on me now
 					kind = "warn"
 				}
 			case "changes":
@@ -690,7 +690,14 @@ func (d *dowt) view(surface string) []any {
 			}
 			c = append(c, badge("approval", kind, label))
 		}
-		if r.CI != "" {
+		if r.Queued { // the pipeline is the train's: say that, not "CI running"
+			badges = append(badges, "ci")
+			label := "in merge queue"
+			if strings.HasPrefix(r.Ref, "!") { // GitLab's
+				label = "merge train running"
+			}
+			c = append(c, badge("ci", "", label))
+		} else if r.CI != "" {
 			badges = append(badges, "ci")
 			kind := map[string]string{"failed": "error", "manual": "warn"}[r.CI]
 			c = append(c, badge("ci", kind, "CI "+r.CI))
