@@ -41,9 +41,9 @@ type dowt struct {
 	sem      chan struct{}
 
 	mu     sync.Mutex
-	spaces map[string]space             // by name
-	status map[string]*status           // by working dir
-	subs   map[*session]map[string]bool // surfaces each frontend shows
+	spaces map[string]space               // by name
+	status map[string]*status             // by working dir
+	subs   map[*session]map[string]string // surfaces each frontend shows, by name: the components last sent, as JSON
 
 	// start is what the +'s sheet last ran in a new worktree's terminal,
 	// kept in startFile (none when "") so the sheet offers it again.
@@ -113,7 +113,7 @@ type status struct {
 
 func newDowt(dn *dennet, endpoint string) *dowt {
 	return &dowt{dn: dn, endpoint: endpoint, sem: make(chan struct{}, lookups),
-		spaces: map[string]space{}, status: map[string]*status{}, subs: map[*session]map[string]bool{}}
+		spaces: map[string]space{}, status: map[string]*status{}, subs: map[*session]map[string]string{}}
 }
 
 type session struct {
@@ -192,10 +192,11 @@ func (d *dowt) serve(s *session) {
 func (d *dowt) subscribe(s *session, name string) {
 	d.mu.Lock()
 	if d.subs[s] == nil {
-		d.subs[s] = map[string]bool{}
+		d.subs[s] = map[string]string{}
 	}
-	d.subs[s][name] = true
 	msg := d.create(name)
+	b, _ := json.Marshal(msg["createSurface"].(map[string]any)["components"])
+	d.subs[s][name] = string(b)
 	d.mu.Unlock()
 	s.send(msg)
 	d.poll()
@@ -225,17 +226,26 @@ func (d *dowt) dirOf(surface string) string {
 	return d.spaces[strings.TrimPrefix(surface, prefix)].Spec.WorkingDir
 }
 
-// redraw sends every panel on dir ("" for all) as it is now, to whoever shows it.
+// redraw sends every panel on dir ("" for all) as it is now, to whoever shows it,
+// unless it is what that frontend already has: dense checks every component it
+// gets against its schema, which costs it more than the compare costs here.
 func (d *dowt) redraw(dir string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for s, names := range d.subs {
-		for name := range names {
-			if dir == "" || d.dirOf(name) == dir {
-				s.send(map[string]any{"version": "1.0", "updateComponents": map[string]any{
-					"surfaceId": name, "components": d.view(name),
-				}})
+		for name, last := range names {
+			if dir != "" && d.dirOf(name) != dir {
+				continue
 			}
+			view := d.view(name)
+			b, _ := json.Marshal(view)
+			if string(b) == last {
+				continue
+			}
+			names[name] = string(b)
+			s.send(map[string]any{"version": "1.0", "updateComponents": map[string]any{
+				"surfaceId": name, "components": view,
+			}})
 		}
 	}
 }
