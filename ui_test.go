@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
+	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,5 +77,38 @@ func TestStartKept(t *testing.T) {
 	d.setStart(want)
 	if got := loadStart(file); got != want {
 		t.Errorf("kept %+v, want %+v", got, want)
+	}
+}
+
+// A redraw that changes nothing sends nothing: dense checks every component it gets.
+func TestRedrawSkipsUnchanged(t *testing.T) {
+	d := newDowt(nil, "")
+	sp := space{}
+	sp.Spec.WorkingDir = "/r"
+	d.spaces["a"] = sp
+	d.status["/r"] = &status{branch: "main", at: time.Now()}
+	front, back := net.Pipe()
+	defer front.Close()
+	lines := make(chan string, 10)
+	go func() {
+		r := bufio.NewScanner(front)
+		r.Buffer(nil, 1<<20)
+		for r.Scan() {
+			lines <- r.Text()
+		}
+	}()
+	s := &session{conn: back}
+	d.subscribe(s, prefix+"a")
+	<-lines // createSurface
+	d.redraw("/r")
+	d.update("/r", func(st *status) { st.note = "hi" })
+	if l := <-lines; !strings.Contains(l, "updateComponents") || !strings.Contains(l, "hi") {
+		t.Fatalf("want the changed panel, got %s", l)
+	}
+	d.redraw("")
+	select {
+	case l := <-lines:
+		t.Fatalf("unchanged panel sent again: %s", l)
+	case <-time.After(100 * time.Millisecond):
 	}
 }
